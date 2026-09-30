@@ -26,11 +26,13 @@ ALLOWED_HOSTS = [
     "127.0.0.1",
     ".ngrok-free.dev",
     ".ngrok-free.app",
+    "restaurants-m6ca.onrender.com",
 ]  # noqa: S104
 
 CSRF_TRUSTED_ORIGINS = [
     "https://*.ngrok-free.dev",
     "https://*.ngrok-free.app",
+    "https://restaurants-m6ca.onrender.com",
 ]
 
 # CACHES
