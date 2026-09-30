@@ -19,7 +19,7 @@ DEBUG = False
 # https://docs.djangoproject.com/en/dev/ref/settings/#allowed-hosts
 ALLOWED_HOSTS = env.list(
     "DJANGO_ALLOWED_HOSTS",
-    default=[],
+    default=["*"],
 )
 
 
@@ -66,7 +66,7 @@ CSRF_COOKIE_NAME = "__Secure-csrftoken"
 # Trusted origins for Django forms, admin and session authentication
 CSRF_TRUSTED_ORIGINS = env.list(
     "DJANGO_CSRF_TRUSTED_ORIGINS",
-    default=[],
+    default=["*"],
 )
 
 # HSTS
