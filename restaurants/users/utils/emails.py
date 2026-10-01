@@ -1,17 +1,16 @@
-import base64
 import logging
-from email.mime.image import MIMEImage
 from pathlib import Path
 from typing import Any
 
 from django.conf import settings
+from django.contrib.auth import get_user_model
 from django.core.mail import EmailMessage
+from django.core.mail import get_connection
 from django.template.loader import render_to_string
 
-from django.contrib.auth import get_user_model
+User = get_user_model()
 
 logger = logging.getLogger(__name__)
-User = get_user_model()
 
 
 class EmailUtil:
@@ -34,32 +33,35 @@ class EmailUtil:
 
             self.testing = getattr(settings, "TESTING", False)
             self.debug = getattr(settings, "DEBUG", False)
-            self.use_brevo = getattr(settings, "USE_BREVO", True)
+            self.brevo_api_key = self._resolve_brevo_api_key()
+            self.use_brevo = bool(self.brevo_api_key) and getattr(
+                settings, "USE_BREVO", True,
+            )
 
             logger.info("Testing mode: %s", self.testing)
             logger.info("Debug mode: %s", self.debug)
-            logger.info("Using Brevo: %s", self.use_brevo)
+            logger.info("Using Brevo (API HTTPS): %s", self.use_brevo)
 
-            if self.use_brevo:
-                try:
-                    import sib_api_v3_sdk
-                except ImportError:
-                    logger.warning(
-                        "sib-api-v3-sdk not installed — falling back to Django SMTP"
-                    )
-                    self.use_brevo = False
-                else:
-                    configuration = sib_api_v3_sdk.Configuration()
-                    configuration.api_key["api-key"] = getattr(
-                        settings,
-                        "BREVO_API_KEY",
-                        "",
-                    )
-                    self.api_instance = sib_api_v3_sdk.TransactionalEmailsApi(
-                        sib_api_v3_sdk.ApiClient(configuration),
-                    )
+            if not self.use_brevo:
+                # Render Free bloque le SMTP sortant : sans clé API, l'envoi
+                # échouera en production. On le dit explicitement au démarrage.
+                logger.warning(
+                    "BREVO_API_KEY absent — repli sur le backend Django %s. "
+                    "Sur Render, renseignez BREVO_API_KEY (API HTTPS Brevo).",
+                    settings.EMAIL_BACKEND,
+                )
 
             self.__class__._initialized = True
+
+    @staticmethod
+    def _resolve_brevo_api_key() -> str:
+        """Clé API Brevo : settings.ANYMAIL puis settings.BREVO_API_KEY."""
+        anymail_settings = getattr(settings, "ANYMAIL", None) or {}
+        return (
+            anymail_settings.get("BREVO_API_KEY")
+            or getattr(settings, "BREVO_API_KEY", "")
+            or ""
+        )
 
     # ═══════════════════════════════════════════════════════════════════════
     # CONFIGURATION & HELPERS
@@ -98,7 +100,7 @@ class EmailUtil:
         return list(
             User.objects.filter(
                 is_active=True,
-                is_superuser=True
+                is_superuser=True,
             )
             .exclude(email="")
             .order_by("email")
@@ -128,15 +130,15 @@ class EmailUtil:
             raise ValueError(msg)
 
     def _render_template_content(
-        self, template: str, subject: str, context: dict | None
+        self, template: str, subject: str, context: dict | None,
     ) -> str:
         """Rend un template email avec le contexte enrichi (logo, site_name)."""
         render_ctx = context or {}
         render_ctx["subject"] = subject
         render_ctx["site_name"] = getattr(
-            settings, "SITE_NAME", "Les délices de Mam's"
+            settings, "SITE_NAME", "Les délices de Mam's",
         )
-        
+
         base_url = getattr(settings, "BASE_URL", "http://localhost:8000")
         render_ctx["base_url"] = base_url
         render_ctx["logo_url"] = f"{base_url}/static/images/logo-mams.png"
@@ -160,7 +162,7 @@ class EmailUtil:
     ) -> bool:
         """Méthode universelle d'envoi d'email."""
         self._validate_send_email_params(
-            to, subject, html_content, text_content, template
+            to, subject, html_content, text_content, template,
         )
 
         if self.debug and not self.testing:
@@ -212,63 +214,37 @@ class EmailUtil:
         text_content: str | None = None,
         attachments: list[str] | None = None,
     ) -> bool:
-        """Envoi via API Brevo (Sendinblue)."""
-        import sib_api_v3_sdk
-        from sib_api_v3_sdk.models.send_smtp_email_attachment import (
-            SendSmtpEmailAttachment,
-        )
-        from sib_api_v3_sdk.rest import ApiException
-
-        logger.info("## Envoi via Brevo ##")
+        """Envoi via l'API Brevo en HTTPS (django-anymail) — jamais de SMTP."""
+        logger.info("## Envoi via Brevo (API HTTPS) ##")
 
         try:
-            if "<" in from_email:
-                sender_name = from_email.split("<", maxsplit=1)[0].strip()
-                sender_email = from_email.split("<")[1].strip(">")
-            else:
-                sender_name = "Les délices de Mam's"
-                sender_email = from_email
-
-            send_smtp_email = sib_api_v3_sdk.SendSmtpEmail(
-                to=[{"email": email} for email in to],
-                sender={"name": sender_name, "email": sender_email},
+            email = EmailMessage(
                 subject=str(subject),
-                html_content=html_content,
-                text_content=text_content,
+                body=html_content or text_content or "",
+                from_email=from_email,
+                to=[],
+                bcc=to,
             )
+            email.content_subtype = "html" if html_content else "plain"
 
             if attachments:
-                brevo_attachments = []
                 for file_path in attachments:
-                    path = Path(file_path)
-                    if path.exists():
-                        with path.open("rb") as f:
-                            file_data = f.read()
-                        brevo_attachments.append(
-                            SendSmtpEmailAttachment(
-                                name=path.name,
-                                content=base64.b64encode(file_data).decode(),
-                            ),
-                        )
-                if brevo_attachments:
-                    send_smtp_email.attachment = brevo_attachments
+                    if Path(file_path).exists():
+                        email.attach_file(file_path)
 
-        except ApiException:
-            logger.exception("❌ Erreur Brevo API")
-            return False
-        except Exception:
-            logger.exception("❌ Erreur inattendue Brevo")
-            return False
-
-        try:
-            response = self.api_instance.send_transac_email(send_smtp_email)
+            connection = get_connection(
+                "anymail.backends.brevo.EmailBackend",
+                api_key=self.brevo_api_key,
+            )
+            sent = connection.send_messages([email])
         except Exception:
             # L'échec du fournisseur d'email ne doit pas casser les vues
             # (inscription, commande, ...) : il est seulement journalisé.
-            logger.exception("❌ Échec de l'envoi Brevo")
+            logger.exception("❌ Échec de l'envoi Brevo (API HTTPS)")
             return False
-        logger.info("✅ Email envoyé via Brevo : %s", response.message_id)
-        return True
+
+        logger.info("✅ Email envoyé via Brevo (%s message(s)) : %s", sent, to)
+        return bool(sent)
 
     def _send_django(
         self,
@@ -355,7 +331,7 @@ class EmailUtil:
         """Envoi d'une campagne de newsletter."""
         if not recipients:
             return True
-            
+
         return self.send_email(
             subject=subject,
             to=recipients,

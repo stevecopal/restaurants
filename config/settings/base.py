@@ -250,6 +250,10 @@ DEFAULT_FROM_EMAIL = env(
     default="nancysikati@gmail.com",
 )
 
+# Clé API Brevo (envoi en HTTPS). Render Free bloque le SMTP sortant
+# (ports 25/465/587) : sans cette clé, aucun email n'est livré en production.
+BREVO_API_KEY = env("BREVO_API_KEY", default="")
+
 SERVER_EMAIL = env(
     "SERVER_EMAIL",
     default=DEFAULT_FROM_EMAIL,
