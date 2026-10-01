@@ -105,6 +105,64 @@ def test_the_otp_email_goes_through_the_brevo_https_api(
     assert "123456" in payload["htmlContent"]
 
 
+def test_the_api_key_is_also_read_from_the_environment(settings, monkeypatch):
+    """Variable posée directement sur Render, même si les settings ne la voient pas."""
+    settings.BREVO_API_KEY = ""
+    monkeypatch.setenv("BREVO_API_KEY", "xkeysib-from-os-environ")
+
+    util = EmailUtil()
+    util._refresh_brevo_config()
+
+    assert util.use_brevo is True
+    assert util.brevo_api_key == "xkeysib-from-os-environ"
+
+
+def test_a_key_added_after_boot_is_used_on_the_next_send(
+    settings,
+    client_user,
+    monkeypatch,
+):
+    """Ajouter BREVO_API_KEY pendant la vie du process suffit (pas de reboot)."""
+    settings.BREVO_API_KEY = ""
+    util = EmailUtil()
+    assert util.use_brevo is False
+
+    request = mock.Mock(return_value=FakeBrevoResponse({"messageId": "msg-2"}))
+    monkeypatch.setattr(requests.Session, "request", request)
+    settings.BREVO_API_KEY = BREVO_API_KEY
+
+    assert util.send_otp_verification(client_user, "112233", "register")
+    assert request.call_count == 1
+
+
+def test_on_render_without_a_key_smtp_is_not_even_tried(
+    settings,
+    client_user,
+    monkeypatch,
+):
+    """Sur Render, le SMTP est bloqué : on échoue vite avec un message clair."""
+    settings.BREVO_API_KEY = ""
+    settings.EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
+    monkeypatch.setenv("RENDER", "true")
+
+    http_request = mock.Mock()
+    monkeypatch.setattr(requests.Session, "request", http_request)
+    smtp_send = mock.Mock()
+    monkeypatch.setattr(
+        "django.core.mail.backends.smtp.EmailBackend.send_messages",
+        smtp_send,
+    )
+
+    util = EmailUtil()
+    sent = util.send_otp_verification(client_user, "999999", "register")
+
+    assert util.use_brevo is False
+    assert sent is False
+    assert http_request.call_count == 0
+    assert smtp_send.call_count == 0
+    assert len(mail.outbox) == 0
+
+
 def test_a_brevo_failure_is_logged_but_never_raised(
     email_util,
     client_user,

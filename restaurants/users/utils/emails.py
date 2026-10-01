@@ -1,4 +1,5 @@
 import logging
+import os
 from pathlib import Path
 from typing import Any
 
@@ -11,6 +12,9 @@ from django.template.loader import render_to_string
 User = get_user_model()
 
 logger = logging.getLogger(__name__)
+
+# Longueur minimale d'une clé pour afficher un fragment masqué de celle-ci.
+MASK_MIN_KEY_LENGTH = 8
 
 
 class EmailUtil:
@@ -27,41 +31,90 @@ class EmailUtil:
             cls._instance = super().__new__(cls)
         return cls._instance
 
+    # Noms possibles de la variable d'environnement (Render / .env).
+    _BREVO_KEY_ENV_VARS = (
+        "BREVO_API_KEY",
+        "ANYMAIL_API_KEY",
+        "SENDINBLUE_API_KEY",
+    )
+
     def __init__(self) -> None:
         if not self.__class__._initialized:
             logger.info("## Initializing EmailUtil — Les délices de Mam's ##")
 
             self.testing = getattr(settings, "TESTING", False)
             self.debug = getattr(settings, "DEBUG", False)
-            self.brevo_api_key = self._resolve_brevo_api_key()
-            self.use_brevo = bool(self.brevo_api_key) and getattr(
-                settings, "USE_BREVO", True,
-            )
+            self._refresh_brevo_config()
 
             logger.info("Testing mode: %s", self.testing)
             logger.info("Debug mode: %s", self.debug)
+            logger.info(
+                "Settings module: %s",
+                os.environ.get("DJANGO_SETTINGS_MODULE"),
+            )
+            logger.info("Expéditeur: %s", self._get_sender())
+            logger.info("Backend email: %s", settings.EMAIL_BACKEND)
+            logger.info("BREVO_API_KEY: %s", self._mask_key(self.brevo_api_key))
             logger.info("Using Brevo (API HTTPS): %s", self.use_brevo)
-
-            if not self.use_brevo:
-                # Render Free bloque le SMTP sortant : sans clé API, l'envoi
-                # échouera en production. On le dit explicitement au démarrage.
-                logger.warning(
-                    "BREVO_API_KEY absent — repli sur le backend Django %s. "
-                    "Sur Render, renseignez BREVO_API_KEY (API HTTPS Brevo).",
-                    settings.EMAIL_BACKEND,
-                )
+            self._warn_if_delivery_cannot_work()
 
             self.__class__._initialized = True
 
-    @staticmethod
-    def _resolve_brevo_api_key() -> str:
-        """Clé API Brevo : settings.ANYMAIL puis settings.BREVO_API_KEY."""
-        anymail_settings = getattr(settings, "ANYMAIL", None) or {}
-        return (
-            anymail_settings.get("BREVO_API_KEY")
-            or getattr(settings, "BREVO_API_KEY", "")
-            or ""
+    def _refresh_brevo_config(self) -> None:
+        """Re-lit la clé à chaque envoi : une variable ajoutée après le boot
+        sur Render doit fonctionner sans redémarrage."""
+        self.brevo_api_key = self._resolve_brevo_api_key()
+        self.use_brevo = bool(self.brevo_api_key) and getattr(
+            settings,
+            "USE_BREVO",
+            True,
         )
+
+    @classmethod
+    def _resolve_brevo_api_key(cls) -> str:
+        """Clé API Brevo : settings.ANYMAIL, settings.BREVO_API_KEY, puis env."""
+        anymail_settings = getattr(settings, "ANYMAIL", None) or {}
+        candidates = [
+            anymail_settings.get("BREVO_API_KEY"),
+            getattr(settings, "BREVO_API_KEY", ""),
+            *(os.environ.get(name, "") for name in cls._BREVO_KEY_ENV_VARS),
+        ]
+        for candidate in candidates:
+            if candidate and str(candidate).strip():
+                return str(candidate).strip()
+        return ""
+
+    @staticmethod
+    def _mask_key(key: str) -> str:
+        if not key:
+            return "ABSENTE"
+        if len(key) <= MASK_MIN_KEY_LENGTH:
+            return "presente (****)"
+        return f"presente ({key[:7]}...{key[-4:]})"
+
+    @staticmethod
+    def _smtp_is_selected() -> bool:
+        return str(settings.EMAIL_BACKEND).endswith("smtp.EmailBackend")
+
+    @staticmethod
+    def _runs_on_render() -> bool:
+        return bool(os.environ.get("RENDER"))
+
+    def _warn_if_delivery_cannot_work(self) -> None:
+        """Dit noir sur blanc ce qui empêchera la livraison des emails."""
+        if self.use_brevo:
+            return
+        if self._runs_on_render() and self._smtp_is_selected():
+            logger.error(
+                "BREVO_API_KEY absente sur Render : le SMTP y est bloqué "
+                "(ports 25/465/587), aucun email ne partira. Ajoutez "
+                "BREVO_API_KEY dans Render > Environment puis redéployez.",
+            )
+        else:
+            logger.warning(
+                "Pas de BREVO_API_KEY — envoi via le backend Django %s.",
+                settings.EMAIL_BACKEND,
+            )
 
     # ═══════════════════════════════════════════════════════════════════════
     # CONFIGURATION & HELPERS
@@ -183,6 +236,10 @@ class EmailUtil:
 
         from_email = self._get_sender(_from)
 
+        # La clé peut être ajoutée après le démarrage du service : on la
+        # reprend en compte avant chaque envoi.
+        self._refresh_brevo_config()
+
         if self.use_brevo:
             return self._send_brevo(
                 subject=subject,
@@ -192,6 +249,18 @@ class EmailUtil:
                 text_content=text_content,
                 attachments=attachments,
             )
+
+        if self._runs_on_render() and self._smtp_is_selected():
+            # Tenter le SMTP sur Render Free gaspille 5s puis échoue à coup
+            # sûr : on journalise l'action attendue à la place du traceback.
+            logger.error(
+                "Email non envoyé (%s) : BREVO_API_KEY absente sur Render et "
+                "le SMTP sortant y est bloqué. Configurez BREVO_API_KEY "
+                "(clé API v3 Brevo) dans Render > Environment.",
+                ", ".join(to),
+            )
+            return False
+
         return self._send_django(
             subject=subject,
             to=to,
