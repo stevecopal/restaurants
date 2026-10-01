@@ -6,5 +6,5 @@ if TYPE_CHECKING:
     from restaurants.users.models import User
 
 
-def test_user_get_absolute_url(user: User):
-    assert user.get_absolute_url() == f"/users/{user.pk}/"
+def test_user_is_stringified_by_its_email(user: User):
+    assert str(user) == user.email

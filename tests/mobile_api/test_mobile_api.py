@@ -3,8 +3,13 @@ from decimal import Decimal
 import pytest
 from rest_framework.test import APIClient
 
-from restaurants.meal.models import Accompaniment, Boisson, Category, Meal
-from restaurants.users.models import Address, RegistrationOtp, User
+from restaurants.meal.models import Accompaniment
+from restaurants.meal.models import Boisson
+from restaurants.meal.models import Category
+from restaurants.meal.models import Meal
+from restaurants.users.models import Address
+from restaurants.users.models import RegistrationOtp
+from restaurants.users.models import User
 
 
 @pytest.mark.django_db
@@ -57,16 +62,27 @@ def test_mobile_order_is_priced_on_the_server():
     meal = Meal.objects.create(name="Poulet", category=category, price=Decimal("2500"))
     meal.accompaniments.add(accompaniment)
     boisson = Boisson.objects.create(name="Jus", price=Decimal("700"))
-    address = Address.objects.create(client=user.client_profile, city="Bafoussam", street="Centre-ville")
+    address = Address.objects.create(
+        client=user.client_profile,
+        city="Bafoussam",
+        street="Centre-ville",
+    )
     client = APIClient()
     client.force_authenticate(user)
 
     response = client.post(
-        "/api/v1/users/orders/create_order/",
+        "/api/v1/orders/create_order/",
         {
-            "address_id": str(address.id),
+            "delivery_address_id": str(address.id),
             "payment_method": "cash",
-            "items": [{"meal_id": str(meal.id), "quantity": 2, "accompaniments": [str(accompaniment.id)], "boissons": [str(boisson.id)]}],
+            "items": [
+                {
+                    "meal_id": str(meal.id),
+                    "quantity": 2,
+                    "accompaniments": [str(accompaniment.id)],
+                    "boissons": [str(boisson.id)],
+                },
+            ],
         },
         format="json",
     )
@@ -84,7 +100,7 @@ def test_cart_accepts_a_meal_and_a_boisson():
     client = APIClient()
 
     response = client.post(
-        "/api/v1/users/cart/add/",
+        "/api/v1/cart/add/",
         {
             "meal_id": str(meal.id),
             "quantity": 2,
@@ -107,13 +123,20 @@ def test_only_an_admin_can_manage_categories():
         password="MotDePasseSolide123!",
     )
     client.force_authenticate(user)
-    forbidden = client.post("/api/v1/meal/admin/categories/", {"name": "Soupes"}, format="json")
+    forbidden = client.post(
+        "/api/v1/admin/categories/",
+        {"name": "Soupes"},
+        format="json",
+    )
     assert forbidden.status_code == 403
 
-    admin = User.objects.create_superuser(email="admin@example.com", password="MotDePasseSolide123!")
+    admin = User.objects.create_superuser(
+        email="admin@example.com",
+        password="MotDePasseSolide123!",
+    )
     client.force_authenticate(admin)
     response = client.post(
-        "/api/v1/meal/admin/categories/",
+        "/api/v1/admin/categories/",
         {"name": "Soupes", "display_order": 4},
         format="json",
     )
@@ -129,11 +152,18 @@ def test_client_and_admin_can_exchange_chat_messages():
         phone="+237693000000",
         password="MotDePasseSolide123!",
     )
-    admin = User.objects.create_superuser(email="chat-admin@example.com", password="MotDePasseSolide123!")
+    admin = User.objects.create_superuser(
+        email="chat-admin@example.com",
+        password="MotDePasseSolide123!",
+    )
     client = APIClient()
 
     client.force_authenticate(client_user)
-    sent = client.post("/api/v1/users/chat/", {"content": "Bonjour, où est ma commande ?"}, format="json")
+    sent = client.post(
+        "/api/v1/chat/",
+        {"content": "Bonjour, où est ma commande ?"},
+        format="json",
+    )
     assert sent.status_code == 201
     assert sent.data["sender_role"] == "client"
 

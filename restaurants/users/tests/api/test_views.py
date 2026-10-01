@@ -1,14 +1,10 @@
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
-
 import pytest
 from rest_framework.test import APIRequestFactory
 
 from restaurants.users.api.views import UserViewSet
-
-if TYPE_CHECKING:
-    from restaurants.users.models import User
+from restaurants.users.models import User
 
 
 class TestUserViewSet:
@@ -25,16 +21,18 @@ class TestUserViewSet:
 
         assert user in view.get_queryset()
 
-    def test_me(self, user: User, api_rf: APIRequestFactory):
+    def test_get_queryset_excludes_other_users(
+        self, user: User, api_rf: APIRequestFactory,
+    ):
+        other = User.objects.create_user(
+            email="other@example.com",
+            phone="+237690000001",
+            password="MotDePasseSolide123!",  # noqa: S106
+        )
         view = UserViewSet()
         request = api_rf.get("/fake-url/")
         request.user = user
 
         view.request = request
 
-        response = view.me(request)  # type: ignore[misc,call-arg,arg-type]
-
-        assert response.data == {
-            "url": f"http://testserver/api/users/{user.pk}/",
-            "name": user.name,
-        }
+        assert other not in view.get_queryset()

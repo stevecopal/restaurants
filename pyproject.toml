@@ -151,6 +151,15 @@ lint.ignore = [
 ]
 lint.isort.force-single-line = true
 
+[tool.ruff.lint.per-file-ignores]
+"tests/**" = [
+  "PLR2004", # codes HTTP en clair dans les assertions
+  "S105",    # mots de passe factices des fixtures
+  "S106",    # idem, passés en argument
+  "SLF001",  # les tests accèdent volontairement aux attributs privés
+  "PLR0913", # signatures de tests riches en fixtures
+]
+
 # ==== pyproject-fmt ====
 [tool.pyproject-fmt]
 keep_full_version = true
@@ -161,6 +170,9 @@ addopts = [
   "--ds=config.settings.test",
   "--reuse-db",
   "--import-mode=importlib",
+  # Scripts manuels a la racine (acces DB au niveau module).
+  "--ignore=test_cart.py",
+  "--ignore=test_messages.py",
 ]
 minversion = "9.0"
 python_files = [

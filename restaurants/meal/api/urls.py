@@ -15,6 +15,7 @@ from .views.boisson_api import BoissonListAPIView
 from .views.category_api import CategoryListAPIView
 from .views.custom_request_api import CustomOrderRequestViewSet
 from .views.meal_api import MealViewSet
+from .views.menu_api import DailyMenuListAPIView
 
 
 
@@ -101,6 +102,13 @@ urlpatterns = [
         "boissons/",
         BoissonListAPIView.as_view(),
         name="boisson-list",
+    ),
+
+
+    path(
+        "menus/",
+        DailyMenuListAPIView.as_view(),
+        name="daily-menu-list",
     ),
 
 

@@ -11,9 +11,11 @@ class TestUserManager:
     def test_create_user(self):
         user = User.objects.create_user(
             email="john@example.com",
+            phone="+237690000002",
             password="something-r@nd0m!",  # noqa: S106
         )
         assert user.email == "john@example.com"
+        assert user.phone == "+237690000002"
         assert not user.is_staff
         assert not user.is_superuser
         assert user.check_password("something-r@nd0m!")

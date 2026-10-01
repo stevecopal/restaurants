@@ -1,10 +1,12 @@
 """Endpoints REST réservés à l'administration du restaurant."""
 
 from rest_framework import permissions, serializers, viewsets
+from rest_framework.fields import empty
+from rest_framework.utils import html
 from drf_spectacular.utils import extend_schema_view
 
 from restaurants.meal.enum import CustomRequestStatus, OrderStatus
-from restaurants.meal.models import Accompaniment, Boisson, Category, CustomOrderRequest, Meal, Order
+from restaurants.meal.models import Accompaniment, Boisson, Category, CustomOrderRequest, DailyMenu, Meal, Order
 from ..docs.admin_api import (
     admin_accompaniment_create_doc, admin_accompaniment_delete_doc, admin_accompaniment_detail_doc,
     admin_accompaniment_list_doc, admin_accompaniment_update_doc,
@@ -19,6 +21,20 @@ from ..docs.admin_api import (
 )
 
 
+class MultipartSafeBooleanField(serializers.BooleanField):
+    """Booléen qui respecte la valeur par défaut du modèle sur un formulaire.
+
+    DRF transforme en ``False`` tout booléen absent d'un input HTML : créer un
+    plat ou une boisson en multipart sans envoyer explicitement ``is_available``
+    désactivait silencieusement l'objet (invisible sur le site et l'API).
+    """
+
+    def get_value(self, dictionary):
+        if html.is_html_input(dictionary) and self.field_name not in dictionary:
+            return empty
+        return super().get_value(dictionary)
+
+
 class AdminOnlyViewSet(viewsets.ModelViewSet):
     """Toutes les opérations ci-dessous exigent un token d'administrateur."""
 
@@ -26,6 +42,8 @@ class AdminOnlyViewSet(viewsets.ModelViewSet):
 
 
 class AdminCategorySerializer(serializers.ModelSerializer):
+    is_active = MultipartSafeBooleanField(required=False, default=True)
+
     class Meta:
         model = Category
         fields = ("id", "name", "slug", "display_order", "is_active")
@@ -33,6 +51,8 @@ class AdminCategorySerializer(serializers.ModelSerializer):
 
 
 class AdminAccompanimentSerializer(serializers.ModelSerializer):
+    is_active = MultipartSafeBooleanField(required=False, default=True)
+
     class Meta:
         model = Accompaniment
         fields = ("id", "name", "slug", "price", "is_active")
@@ -40,6 +60,9 @@ class AdminAccompanimentSerializer(serializers.ModelSerializer):
 
 
 class AdminBoissonSerializer(serializers.ModelSerializer):
+    is_active = MultipartSafeBooleanField(required=False, default=True)
+    is_available = MultipartSafeBooleanField(required=False, default=True)
+
     class Meta:
         model = Boisson
         fields = ("id", "name", "slug", "price", "image", "is_available", "is_active")
@@ -47,12 +70,21 @@ class AdminBoissonSerializer(serializers.ModelSerializer):
 
 
 class AdminMealSerializer(serializers.ModelSerializer):
+    daily_menus = serializers.PrimaryKeyRelatedField(
+        queryset=DailyMenu.objects.all(),
+        many=True,
+        required=False,
+        help_text="UUID des menus journaliers (jours) auxquels ce plat appartient.",
+    )
+    is_active = MultipartSafeBooleanField(required=False, default=True)
+    is_available = MultipartSafeBooleanField(required=False, default=True)
+
     class Meta:
         model = Meal
         fields = (
             "id", "name", "slug", "description", "price", "image", "category",
             "accompaniments", "max_included_accompaniments", "availability_mode",
-            "is_available", "is_active",
+            "daily_menus", "is_available", "is_active",
         )
         read_only_fields = ("id", "slug")
 
@@ -77,7 +109,7 @@ class AdminBoissonViewSet(AdminOnlyViewSet):
 
 @extend_schema_view(list=admin_meal_list_doc, create=admin_meal_create_doc, retrieve=admin_meal_detail_doc, update=admin_meal_update_doc, partial_update=admin_meal_update_doc, destroy=admin_meal_delete_doc)
 class AdminMealViewSet(AdminOnlyViewSet):
-    queryset = Meal.objects.select_related("category").prefetch_related("accompaniments")
+    queryset = Meal.objects.select_related("category").prefetch_related("accompaniments", "daily_menus")
     serializer_class = AdminMealSerializer
 
 

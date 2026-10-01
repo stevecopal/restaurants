@@ -98,7 +98,7 @@ SECURE_CONTENT_TYPE_NOSNIFF = env.bool(
 # ------------------------------------------------------------------------------
 STORAGES = {
     "default": {
-        "BACKEND": "cloudinary_storage.storage.MediaCloudinaryStorage",
+        "BACKEND": "restaurants.core.storage.SecureUrlCloudinaryStorage",
     },
     "staticfiles": {
         "BACKEND": "whitenoise.storage.CompressedManifestStaticFilesStorage",

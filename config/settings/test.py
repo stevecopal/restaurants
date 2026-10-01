@@ -36,3 +36,14 @@ TEMPLATES[0]["OPTIONS"]["debug"] = True  # type: ignore[index]
 MEDIA_URL = "http://media.testserver/"
 # Your stuff...
 # ------------------------------------------------------------------------------
+
+# CLOUDINARY
+# ------------------------------------------------------------------------------
+# Credentials factices : les tests ne téléversent jamais sur Cloudinary, mais
+# l'import du stockage doit rester possible sans dépendre du .env.
+CLOUDINARY_STORAGE = {
+    "CLOUD_NAME": "demo",
+    "API_KEY": "demo",
+    "API_SECRET": "demo",
+    "SECURE": True,
+}

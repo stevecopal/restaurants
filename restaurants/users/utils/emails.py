@@ -259,10 +259,16 @@ class EmailUtil:
         except Exception:
             logger.exception("❌ Erreur inattendue Brevo")
             return False
-        else:
+
+        try:
             response = self.api_instance.send_transac_email(send_smtp_email)
-            logger.info("✅ Email envoyé via Brevo : %s", response.message_id)
-            return True
+        except Exception:
+            # L'échec du fournisseur d'email ne doit pas casser les vues
+            # (inscription, commande, ...) : il est seulement journalisé.
+            logger.exception("❌ Échec de l'envoi Brevo")
+            return False
+        logger.info("✅ Email envoyé via Brevo : %s", response.message_id)
+        return True
 
     def _send_django(
         self,
@@ -292,13 +298,14 @@ class EmailUtil:
                     if Path(file_path).exists():
                         email.attach_file(file_path)
 
-        except Exception:
-            logger.exception("❌ Erreur Django SMTP")
-            return False
-        else:
             email.send()
-            logger.info("✅ Email envoyé via Django SMTP")
-            return True
+        except Exception:
+            # SMTP/Brevo indisponible : on journalise au lieu de casser la
+            # requête HTTP (l'inscription ou une commande doivent passer).
+            logger.exception("❌ Échec de l'envoi email Django")
+            return False
+        logger.info("✅ Email envoyé via Django SMTP")
+        return True
 
     # ═══════════════════════════════════════════════════════════════════════
     # SHORTCUTS MÉTIER — LES DÉLICES DE MAM'S

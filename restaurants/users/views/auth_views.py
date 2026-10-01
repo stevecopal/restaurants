@@ -1,3 +1,4 @@
+import logging
 import random
 
 from django.conf import settings
@@ -11,6 +12,8 @@ from django.views import View
 from restaurants.users.models import Client
 
 User = get_user_model()
+
+logger = logging.getLogger(__name__)
 
 
 class CustomLogoutView(View):
@@ -35,6 +38,15 @@ class RegisterView(View):
         password = request.POST.get("password", "")
         confirm_password = request.POST.get("confirm_password", "")
 
+        if not email:
+
+            messages.error(
+                request,
+                "L'adresse email est obligatoire."
+            )
+
+            return redirect("users:register")
+
         if password != confirm_password:
 
             messages.error(
@@ -42,7 +54,7 @@ class RegisterView(View):
                 "Les mots de passe ne correspondent pas."
             )
 
-            return redirect("/")
+            return redirect("users:register")
 
         if User.objects.filter(email=email).exists():
 
@@ -51,7 +63,7 @@ class RegisterView(View):
                 "Cette adresse email est déjà utilisée."
             )
 
-            return redirect("/")
+            return redirect("users:register")
 
         if not phone:
 
@@ -60,7 +72,7 @@ class RegisterView(View):
                 "Le numéro de téléphone est obligatoire."
             )
 
-            return redirect("/")
+            return redirect("users:register")
 
         if User.objects.filter(phone=phone).exists():
 
@@ -69,7 +81,7 @@ class RegisterView(View):
                 "Ce numéro de téléphone existe déjà."
             )
 
-            return redirect("/")
+            return redirect("users:register")
 
         otp = random.randint(100000, 999999)
 
@@ -83,13 +95,24 @@ class RegisterView(View):
             "password": password,
         }
 
-        send_mail(
-            subject="Code de vérification",
-            message=f"Votre code OTP est : {otp}",
-            from_email=settings.DEFAULT_FROM_EMAIL,
-            recipient_list=[email],
-            fail_silently=False,
-        )
+        try:
+            send_mail(
+                subject="Code de vérification",
+                message=f"Votre code OTP est : {otp}",
+                from_email=settings.DEFAULT_FROM_EMAIL,
+                recipient_list=[email],
+                fail_silently=False,
+            )
+        except Exception:
+            # SMTP indisponible : message d'erreur au lieu d'une page 500.
+            logger.exception("Échec de l'envoi de l'OTP web pour %s", email)
+            request.session.pop("otp", None)
+            request.session.pop("register_data", None)
+            messages.error(
+                request,
+                "Impossible d'envoyer l'email de vérification. Veuillez réessayer plus tard."
+            )
+            return redirect("users:register")
 
         messages.success(
             request,
@@ -107,10 +130,7 @@ class VerifyOtpView(View):
         return render(request, self.template_name)
 
     def post(self, request):
-        print("JE SUIS DANS VERIFY OTP")
         otp = request.POST.get("otp", "").strip()
-
-        
 
         session_otp = request.session.get("otp")
         register_data = request.session.get("register_data")
@@ -122,7 +142,7 @@ class VerifyOtpView(View):
                 "Session expirée. Veuillez recommencer."
             )
 
-            return redirect("/")
+            return redirect("users:register")
 
         if otp != session_otp:
 
@@ -164,9 +184,4 @@ class VerifyOtpView(View):
             "Votre compte client a été créé avec succès."
         )
 
-
-        print("MESSAGES AJOUTES")
-
-
-        return redirect("users:client-dashboard"
-        )
+        return redirect("users:client-dashboard")

@@ -32,3 +32,14 @@ boisson_list_doc = extend_schema(
     description="Retourne uniquement les boissons disponibles à la commande.",
     responses={200: OpenApiResponse(description="Liste des boissons disponibles.")},
 )
+
+daily_menu_list_doc = extend_schema(
+    tags=[MENU_TAG],
+    summary="Lister les menus journaliers",
+    description=(
+        "Retourne les menus actifs de la semaine (jour, libellé et plats "
+        "du jour). Le champ ``days`` de ``/api/v1/meals/`` donne le même "
+        "information plat par plat."
+    ),
+    responses={200: OpenApiResponse(description="Liste des menus journaliers actifs.")},
+)

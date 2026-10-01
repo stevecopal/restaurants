@@ -117,7 +117,8 @@ AUTHENTICATION_BACKENDS = [
 # https://docs.djangoproject.com/en/dev/ref/settings/#auth-user-model
 AUTH_USER_MODEL = "users.User"
 # https://docs.djangoproject.com/en/dev/ref/settings/#login-redirect-url
-LOGIN_REDIRECT_URL = "users:redirect"
+# `users:redirect` n'existe plus dans ce projet : on renvoie vers l'accueil.
+LOGIN_REDIRECT_URL = "users:home"
 # https://docs.djangoproject.com/en/dev/ref/settings/#login-url
 LOGIN_URL = "users:login"
 

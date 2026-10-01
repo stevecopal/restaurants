@@ -1,3 +1,4 @@
+import logging
 import random
 from datetime import timedelta
 
@@ -11,15 +12,16 @@ from rest_framework.exceptions import ValidationError
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from drf_spectacular.utils import extend_schema_view
-from restaurants.meal.models import Boisson, Category, CustomOrderRequest, Meal, Order
+from restaurants.meal.models import Boisson, Category, CustomOrderRequest, DailyMenu, Meal, Order
+from restaurants.users.cart import Cart
 from restaurants.users.enum import TestimonialStatus
 from restaurants.users.models import Address, Client, NewsletterSubscriber, RegistrationOtp, Testimonial, User
 from restaurants.users.utils.emails import EmailUtil
 
 from ..serializers.mobile_serializers import (
     AddressSerializer, BoissonSerializer, CategorySerializer, CustomOrderRequestSerializer,
-    LoginSerializer, MealSerializer, NewsletterSerializer, OrderCreateSerializer, OrderSerializer,
-    RegisterOtpSerializer, UserSerializer, VerifyOtpSerializer, TestimonialSerializer,
+    DailyMenuSerializer, LoginSerializer, MealSerializer, NewsletterSerializer, OrderCreateSerializer,
+    OrderSerializer, RegisterOtpSerializer, UserSerializer, VerifyOtpSerializer, TestimonialSerializer,
 )
 from ..docs.address import (
     address_create_doc, address_delete_doc, address_detail_doc, address_list_doc,
@@ -33,6 +35,17 @@ from ..docs.order import (
 )
 from ..docs.profile import profile_get_doc, profile_update_doc
 from ..docs.testimonial import testimonial_get_doc, testimonial_update_doc
+
+logger = logging.getLogger(__name__)
+
+
+def client_profile_of(user):
+    """Profil client de l'utilisateur, ou ``None`` (admin sans profil client).
+
+    Évite un ``RelatedObjectDoesNotExist`` (500) quand un administrateur
+    appelle un endpoint réservé aux clients.
+    """
+    return getattr(user, "client_profile", None)
 
 
 class EmptySerializer(serializers.Serializer):
@@ -75,11 +88,19 @@ class RegisterAPIView(generics.GenericAPIView):
             purpose="register",
         )
 
-        EmailUtil().send_otp_verification(
-            User(email=email),
-            otp_code,
-            purpose="Inscription",
-        )
+        # L'envoi d'email ne doit jamais faire échouer l'inscription :
+        # l'OTP est stocké en base, le problème est journalisé côté serveur.
+        try:
+            email_sent = EmailUtil().send_otp_verification(
+                User(email=email),
+                otp_code,
+                purpose="Inscription",
+            )
+        except Exception:  # noqa: BLE001 - provider email indisponible
+            logger.exception("Échec de l'envoi de l'OTP pour %s", email)
+            email_sent = False
+        if not email_sent:
+            logger.warning("OTP %s non envoyé pour %s", registration_otp.pk, email)
 
         return Response(
             {
@@ -191,10 +212,16 @@ class AddressViewSet(viewsets.ModelViewSet):
     serializer_class = AddressSerializer
 
     def get_queryset(self):
-        return Address.objects.filter(client=self.request.user.client_profile).order_by("-is_default", "-created")
+        client = client_profile_of(self.request.user)
+        if client is None:
+            return Address.objects.none()
+        return client.addresses.order_by("-is_default", "-created")
 
     def perform_create(self, serializer):
-        serializer.save(client=self.request.user.client_profile)
+        client = client_profile_of(self.request.user)
+        if client is None:
+            raise ValidationError({"detail": ["Seul un client peut créer une adresse."]})
+        serializer.save(client=client)
 
     def perform_destroy(self, instance):
         instance.soft_delete()
@@ -216,7 +243,21 @@ class CategoryListAPIView(generics.ListAPIView):
 class MealViewSet(viewsets.ReadOnlyModelViewSet):
     permission_classes = (permissions.AllowAny,)
     serializer_class = MealSerializer
-    queryset = Meal.objects.filter(is_available=True).select_related("category").prefetch_related("accompaniments")
+    queryset = (
+        Meal.objects.filter(is_available=True)
+        .select_related("category")
+        .prefetch_related("accompaniments", "daily_menus")
+    )
+
+
+class DailyMenuListAPIView(generics.ListAPIView):
+    """Menus journaliers actifs : jour, libellé et plats du jour."""
+
+    permission_classes = (permissions.AllowAny,)
+    serializer_class = DailyMenuSerializer
+    queryset = DailyMenu.objects.filter(is_active=True).prefetch_related(
+        "meals__category", "meals__accompaniments", "meals__daily_menus"
+    ).order_by("day")
 
 
 class BoissonListAPIView(generics.ListAPIView):
@@ -230,13 +271,22 @@ class OrderViewSet(viewsets.ReadOnlyModelViewSet):
     serializer_class = OrderSerializer
 
     def get_queryset(self):
-        return Order.objects.filter(client=self.request.user.client_profile).select_related("delivery_address").prefetch_related(
+        client = client_profile_of(self.request.user)
+        if client is None:
+            return Order.objects.none()
+        return Order.objects.filter(client=client).select_related(
+            "delivery_address", "client__user"
+        ).prefetch_related(
             "items__meal__category", "items__meal__accompaniments", "items__order_item_accompaniments__accompaniment", "items__order_item_boissons__boisson"
         )
 
     @action(detail=False, methods=["post"])
     def create_order(self, request):
-        serializer = OrderCreateSerializer(data=request.data, context={"request": request})
+        cart = Cart(request)
+        serializer = OrderCreateSerializer(
+            data=request.data,
+            context={"request": request, "cart": cart, "cart_items": list(cart)},
+        )
         serializer.is_valid(raise_exception=True)
         order = serializer.save()
         return Response(OrderSerializer(order, context={"request": request}).data, status=status.HTTP_201_CREATED)
@@ -252,17 +302,26 @@ class CustomOrderRequestViewSet(viewsets.ModelViewSet):
     http_method_names = ["get", "post", "head", "options"]
 
     def get_queryset(self):
-        return CustomOrderRequest.objects.filter(client=self.request.user.client_profile)
+        client = client_profile_of(self.request.user)
+        if client is None:
+            return CustomOrderRequest.objects.none()
+        return CustomOrderRequest.objects.filter(client=client)
 
     def perform_create(self, serializer):
-        serializer.save(client=self.request.user.client_profile)
+        client = client_profile_of(self.request.user)
+        if client is None:
+            raise ValidationError({"detail": ["Seul un client peut faire une demande sur mesure."]})
+        serializer.save(client=client)
 
 
 class TestimonialAPIView(generics.GenericAPIView):
     serializer_class = TestimonialSerializer
 
     def get_object(self):
-        return Testimonial.objects.filter(client=self.request.user.client_profile).first()
+        client = client_profile_of(self.request.user)
+        if client is None:
+            return None
+        return Testimonial.objects.filter(client=client).first()
 
     @testimonial_get_doc
     def get(self, request, *args, **kwargs):
@@ -271,10 +330,13 @@ class TestimonialAPIView(generics.GenericAPIView):
 
     @testimonial_update_doc
     def put(self, request, *args, **kwargs):
+        client = client_profile_of(self.request.user)
+        if client is None:
+            raise ValidationError({"detail": ["Seul un client peut laisser un avis."]})
         testimonial = self.get_object()
         serializer = self.get_serializer(testimonial, data=request.data)
         serializer.is_valid(raise_exception=True)
-        serializer.save(client=request.user.client_profile, status=TestimonialStatus.PENDING)
+        serializer.save(client=client, status=TestimonialStatus.PENDING)
         return Response(serializer.data)
 
 

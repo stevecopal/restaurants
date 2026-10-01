@@ -32,11 +32,16 @@ class CartAPIView(APIView):
     response_serializer_class = CartResponseSerializer
 
     @staticmethod
-    def response(cart):
+    def response(cart, request=None):
         items = []
         for item in cart:
             serialized = dict(item)
             serialized["subtotal"] = str(item["subtotal"])
+            image_url = serialized.get("meal_image_url") or ""
+            if image_url and request is not None:
+                # URL absolue : indispensable pour React Native qui n'a pas
+                # l'origine du serveur, comme pour le navigateur.
+                serialized["meal_image_url"] = request.build_absolute_uri(image_url)
             items.append(serialized)
         return Response({"items": items, "count": len(cart), "total": str(cart.get_total_price())})
 
@@ -44,7 +49,7 @@ class CartAPIView(APIView):
 class CartDetailAPIView(CartAPIView):
     @cart_detail_doc
     def get(self, request):
-        return self.response(Cart(request))
+        return self.response(Cart(request), request)
 
 
 class CartAddAPIView(CartAPIView):
@@ -58,11 +63,21 @@ class CartAddAPIView(CartAPIView):
         boissons = self._boissons(request.data.get("boissons", []))
         cart = Cart(request)
         cart.add(meal, quantity, accompaniments, boissons)
-        return self.response(cart)
+        return self.response(cart, request)
+
+    @staticmethod
+    def _component_quantities(values):
+        """Accepte ``["<uuid>", ...]`` et ``[{"id": ..., "quantity": n}, ...]``."""
+        quantities = {}
+        for value in values or []:
+            raw_id = value.get("id") if isinstance(value, dict) else value
+            quantity = value.get("quantity", 1) if isinstance(value, dict) else 1
+            quantities[str(raw_id)] = int(quantity)
+        return quantities
 
     @staticmethod
     def _accompaniments(values, meal):
-        quantities = {str(value["id"]): int(value.get("quantity", 1)) for value in values}
+        quantities = CartAddAPIView._component_quantities(values)
         objects = list(Accompaniment.objects.filter(id__in=quantities))
         if len(objects) != len(quantities) or any(item not in meal.accompaniments.all() for item in objects):
             raise ValidationError({"accompaniments": "Accompagnement invalide pour ce plat."})
@@ -70,7 +85,7 @@ class CartAddAPIView(CartAPIView):
 
     @staticmethod
     def _boissons(values):
-        quantities = {str(value["id"]): int(value.get("quantity", 1)) for value in values}
+        quantities = CartAddAPIView._component_quantities(values)
         objects = list(Boisson.objects.filter(id__in=quantities, is_available=True))
         if len(objects) != len(quantities):
             raise ValidationError({"boissons": "Boisson indisponible."})
@@ -82,7 +97,7 @@ class CartRemoveAPIView(CartAPIView):
     def post(self, request):
         cart = Cart(request)
         cart.remove(request.data.get("item_id"))
-        return self.response(cart)
+        return self.response(cart, request)
 
 
 class CartUpdateAPIView(CartAPIView):
@@ -91,7 +106,7 @@ class CartUpdateAPIView(CartAPIView):
         quantity = int(request.data.get("quantity", 0))
         cart = Cart(request)
         cart.update_quantity(request.data.get("item_id"), quantity)
-        return self.response(cart)
+        return self.response(cart, request)
 
 
 class CartUpdateComponentAPIView(CartAPIView):
@@ -104,7 +119,7 @@ class CartUpdateComponentAPIView(CartAPIView):
         cart.update_component(
             request.data.get("item_id"), component_type, request.data.get("component_id"), int(request.data.get("quantity", 0))
         )
-        return self.response(cart)
+        return self.response(cart, request)
 
 
 class CartAddBoissonAPIView(CartAPIView):
@@ -116,4 +131,4 @@ class CartAddBoissonAPIView(CartAPIView):
             return Response({"quantity": ["Doit être supérieur à zéro."]}, status=status.HTTP_400_BAD_REQUEST)
         cart = Cart(request)
         cart.add_standalone_boisson(boisson, quantity)
-        return self.response(cart)
+        return self.response(cart, request)

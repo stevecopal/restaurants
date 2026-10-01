@@ -55,6 +55,26 @@ EMAIL_BACKEND = "django.core.mail.backends.smtp.EmailBackend"
 # http://whitenoise.evans.io/en/latest/django.html#using-whitenoise-in-development
 INSTALLED_APPS = ["whitenoise.runserver_nostatic", *INSTALLED_APPS]
 
+# Stockage Cloudinary des médias
+# ------------------------------------------------------------------------------
+# Le développement local écrit dans la même base que la production : les
+# images doivent donc aller sur Cloudinary pour rester disponibles sur Render.
+# Sans credentials, on garde le stockage fichier local.
+STORAGES = {
+    "default": {"BACKEND": "django.core.files.storage.FileSystemStorage"},
+    "staticfiles": {"BACKEND": "django.contrib.staticfiles.storage.StaticFilesStorage"},
+}
+CLOUDINARY_STORAGE = {
+    "CLOUD_NAME": env("CLOUDINARY_CLOUD_NAME", default=""),
+    "API_KEY": env("CLOUDINARY_API_KEY", default=""),
+    "API_SECRET": env("CLOUDINARY_API_SECRET", default=""),
+}
+if all(CLOUDINARY_STORAGE.values()):
+    INSTALLED_APPS += ["cloudinary", "cloudinary_storage"]
+    STORAGES["default"] = {
+        "BACKEND": "restaurants.core.storage.SecureUrlCloudinaryStorage",
+    }
+
 
 # django-debug-toolbar
 # ------------------------------------------------------------------------------
